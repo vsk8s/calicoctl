@@ -1,0 +1,18 @@
+Source: calico-ctl
+Section: devel
+Priority: optional
+Maintainer: Maximilian Falkenstein <maximilian.falkenstein@sos.ethz.ch>
+Build-Depends: debhelper (>= 9),
+               dh-golang,
+               golang-go,
+               golang-glide
+Standards-Version: 4.2.1
+Homepage: https://github.com/projectcalico/calicoctl
+XS-Go-Import-Path: github.com/projectcalico/calicoctl
+
+Package: calico-ctl
+Architecture: any
+Built-Using: ${misc:Built-Using}
+Depends: ${misc:Depends},
+         ${shlibs:Depends}
+Description: The calico/ctl binary
