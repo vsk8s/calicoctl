@@ -1,4 +1,4 @@
-// Copyright (c) 2016 Tigera, Inc. All rights reserved.
+// Copyright (c) 2019 Tigera, Inc. All rights reserved.
 
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -16,8 +16,8 @@ package main
 
 import (
 	"fmt"
-
 	"os"
+	"strings"
 
 	"github.com/docopt/docopt-go"
 	"github.com/projectcalico/calicoctl/calicoctl/commands"
@@ -36,6 +36,7 @@ func main() {
               name.
     get       Get a resource identified by file, stdin or resource type and
               name.
+    label     Add or update labels of resources.
     convert   Convert config files between different API versions.
     ipam      IP address management.
     node      Calico node management.
@@ -53,7 +54,14 @@ Description:
 
   See 'calicoctl <command> --help' to read about a specific subcommand.
 `
-	arguments, _ := docopt.Parse(doc, nil, true, commands.VERSION_SUMMARY, true, false)
+	arguments, err := docopt.Parse(doc, nil, true, commands.VERSION_SUMMARY, true, false)
+	if err != nil {
+		if _, ok := err.(*docopt.UserError); ok {
+			// the user gave us bad input
+			fmt.Printf("Invalid option: 'calicoctl %s'. Use flag '--help' to read about a specific subcommand.\n", strings.Join(os.Args[1:], " "))
+		}
+		os.Exit(1)
+	}
 
 	if logLevel := arguments["--log-level"]; logLevel != nil {
 		parsedLogLevel, err := log.ParseLevel(logLevel.(string))
@@ -71,28 +79,35 @@ Description:
 		command := arguments["<command>"].(string)
 		args := append([]string{command}, arguments["<args>"].([]string)...)
 
+		var err error
+
 		switch command {
 		case "create":
-			commands.Create(args)
+			err = commands.Create(args)
 		case "replace":
-			commands.Replace(args)
+			err = commands.Replace(args)
 		case "apply":
-			commands.Apply(args)
+			err = commands.Apply(args)
 		case "delete":
-			commands.Delete(args)
+			err = commands.Delete(args)
 		case "get":
-			commands.Get(args)
+			err = commands.Get(args)
+		case "label":
+			err = commands.Label(args)
 		case "convert":
-			commands.Convert(args)
+			err = commands.Convert(args)
 		case "version":
-			commands.Version(args)
+			err = commands.Version(args)
 		case "node":
-			commands.Node(args)
+			err = commands.Node(args)
 		case "ipam":
-			commands.IPAM(args)
+			err = commands.IPAM(args)
 		default:
-			fmt.Fprintf(os.Stderr, "Unknown command: %q\n", command)
-			fmt.Println(doc)
+			err = fmt.Errorf("Unknown command: %q\n%s", command, doc)
+		}
+
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "%s\n", err)
 			os.Exit(1)
 		}
 	}
