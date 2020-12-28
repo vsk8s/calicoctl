@@ -1,4 +1,4 @@
-// Copyright (c) 2016-2019 Tigera, Inc. All rights reserved.
+// Copyright (c) 2016-2020 Tigera, Inc. All rights reserved.
 
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -21,31 +21,38 @@ import (
 	"github.com/docopt/docopt-go"
 	log "github.com/sirupsen/logrus"
 
+	"github.com/projectcalico/calicoctl/calicoctl/commands/common"
 	"github.com/projectcalico/calicoctl/calicoctl/commands/constants"
+	"github.com/projectcalico/calicoctl/calicoctl/util"
 )
 
 func Delete(args []string) error {
 	doc := constants.DatastoreIntro + `Usage:
-  calicoctl delete ( (<KIND> [<NAME>...]) |
-                   --filename=<FILE>)
+  <BINARY_NAME> delete ( (<KIND> [<NAME>...]) |
+                   --filename=<FILE> [--recursive] [--skip-empty] )
                    [--skip-not-exists] [--config=<CONFIG>] [--namespace=<NS>]
 
 Examples:
   # Delete a policy using the type and name specified in policy.yaml.
-  calicoctl delete -f ./policy.yaml
+  <BINARY_NAME> delete -f ./policy.yaml
 
   # Delete a policy based on the type and name in the YAML passed into stdin.
-  cat policy.yaml | calicoctl delete -f -
+  cat policy.yaml | <BINARY_NAME> delete -f -
 
   # Delete policies with names "foo" and "bar"
-  calicoctl delete policy foo bar
+  <BINARY_NAME> delete policy foo bar
 
 Options:
   -h --help                 Show this screen.
   -s --skip-not-exists      Skip over and treat as successful, resources that
                             don't exist.
   -f --filename=<FILENAME>  Filename to use to delete the resource.  If set to
-                            "-" loads from stdin.
+                            "-" loads from stdin. If filename is a directory, this command is
+                            invoked for each .json .yaml and .yml file within that directory,
+                            terminating after the first failure.
+  -R --recursive            Process the filename specified in -f or --filename recursively.
+     --skip-empty           Do not error if any files or directory specified using -f or --filename contain no
+                            data.
   -c --config=<CONFIG>      Path to the file containing connection
                             configuration in YAML or JSON format.
                             [default: ` + constants.DefaultConfigPath + `]
@@ -68,6 +75,7 @@ Description:
     * globalNetworkSet
     * hostEndpoint
     * ipPool
+    * kubeControllersConfiguration
     * networkPolicy
     * networkSet
     * node
@@ -92,6 +100,10 @@ Description:
   failure deleting a specific resource it is possible to work out which
   resource failed based on the number of resources successfully deleted.
 `
+	// Replace all instances of BINARY_NAME with the name of the binary.
+	name, _ := util.NameAndDescription()
+	doc = strings.ReplaceAll(doc, "<BINARY_NAME>", name)
+
 	parsedArgs, err := docopt.Parse(doc, args, true, "", false, false)
 	if err != nil {
 		return fmt.Errorf("Invalid option: 'calicoctl %s'. Use flag '--help' to read about a specific subcommand.", strings.Join(args, " "))
@@ -100,28 +112,32 @@ Description:
 		return nil
 	}
 
-	results := executeConfigCommand(parsedArgs, actionDelete)
+	results := common.ExecuteConfigCommand(parsedArgs, common.ActionDelete)
 	log.Infof("results: %+v", results)
 
-	if results.fileInvalid {
-		return fmt.Errorf("Failed to execute command: %v", results.err)
-	} else if results.numResources == 0 {
-		return fmt.Errorf("No resources specified")
-	} else if results.err == nil && results.numHandled > 0 {
-		if results.singleKind != "" {
-			fmt.Printf("Successfully deleted %d '%s' resource(s)\n", results.numHandled, results.singleKind)
-		} else {
-			fmt.Printf("Successfully deleted %d resource(s)\n", results.numHandled)
+	if results.FileInvalid {
+		return fmt.Errorf("Failed to execute command: %v", results.Err)
+	} else if results.NumResources == 0 {
+		// No resources specified. If there is an associated error use that, otherwise print message with no error.
+		if results.Err != nil {
+			return results.Err
 		}
-	} else if results.err != nil {
-		return fmt.Errorf("Hit error: %v", results.err)
+		fmt.Println("No resources specified")
+	} else if results.Err == nil && results.NumHandled > 0 {
+		if results.SingleKind != "" {
+			fmt.Printf("Successfully deleted %d '%s' resource(s)\n", results.NumHandled, results.SingleKind)
+		} else {
+			fmt.Printf("Successfully deleted %d resource(s)\n", results.NumHandled)
+		}
+	} else if results.Err != nil {
+		return fmt.Errorf("Hit error: %v", results.Err)
 	}
 
-	if len(results.resErrs) > 0 {
+	if len(results.ResErrs) > 0 {
 		var errStr string
-		for _, err := range results.resErrs {
-			if results.singleKind != "" {
-				errStr += fmt.Sprintf("Failed to delete '%s' resource: %v\n", results.singleKind, err)
+		for _, err := range results.ResErrs {
+			if results.SingleKind != "" {
+				errStr += fmt.Sprintf("Failed to delete '%s' resource: %v\n", results.SingleKind, err)
 			} else {
 				errStr += fmt.Sprintf("Failed to delete resource: %v\n", err)
 			}

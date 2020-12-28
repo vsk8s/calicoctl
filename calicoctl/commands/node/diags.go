@@ -26,6 +26,7 @@ import (
 	"time"
 
 	"github.com/docopt/docopt-go"
+	"github.com/projectcalico/calicoctl/calicoctl/util"
 	log "github.com/sirupsen/logrus"
 	shutil "github.com/termie/go-shutil"
 )
@@ -41,7 +42,7 @@ type diagCmd struct {
 func Diags(args []string) error {
 	var err error
 	doc := `Usage:
-  calicoctl node diags [--log-dir=<LOG_DIR>]
+  <BINARY_NAME> node diags [--log-dir=<LOG_DIR>]
 
 Options:
   -h --help               Show this screen.
@@ -60,6 +61,9 @@ Description:
   This command must be run on the specific Calico node that you are gathering
   diagnostics for.
 `
+	// Replace all instances of BINARY_NAME with the name of the binary.
+	name, _ := util.NameAndDescription()
+	doc = strings.ReplaceAll(doc, "<BINARY_NAME>", name)
 
 	arguments, err := docopt.Parse(doc, args, true, "", false, false)
 	if err != nil {
@@ -80,7 +84,7 @@ func runDiags(logDir string) error {
 	cmds := []diagCmd{
 		{"", "date", "date"},
 		{"", "hostname", "hostname"},
-		{"Dumping netstat", "netstat --all --numeric", "netstat"},
+		{"Dumping netstat", "netstat -a -n", "netstat"},
 		{"Dumping routes (IPv4)", "ip -4 route", "ipv4_route"},
 		{"Dumping routes (IPv6)", "ip -6 route", "ipv6_route"},
 		{"Dumping interface info (IPv4)", "ip -4 addr", "ipv4_addr"},
@@ -88,7 +92,7 @@ func runDiags(logDir string) error {
 		{"Dumping iptables (IPv4)", "iptables-save -c", "ipv4_tables"},
 		{"Dumping iptables (IPv6)", "ip6tables-save -c", "ipv6_tables"},
 		{"Dumping ipsets", "ipset list", "ipsets"},
-		{"Dumping ipsets (container)", "docker run --privileged --net=host calico/node ipset list", "ipset_container"},
+		{"Dumping ipsets (container)", "docker run --rm --privileged --net=host calico/node ipset list", "ipset_container"},
 		{"Copying journal for calico-node.service", "journalctl -u calico-node.service --no-pager", "journalctl_calico_node"},
 		{"Dumping felix stats", "pkill -SIGUSR1 felix", ""},
 	}
@@ -110,7 +114,10 @@ func runDiags(logDir string) error {
 		return fmt.Errorf("Error changing directory to temp directory to dump logs: %v", err)
 	}
 
-	os.Mkdir("diagnostics", os.ModeDir)
+	err = os.Mkdir("diagnostics", os.ModeDir)
+	if err != nil {
+		return fmt.Errorf("Error creating diagnostics directory: %v\n", err)
+	}
 	diagsTmpDir := filepath.Join(tmpDir, "diagnostics")
 
 	for _, v := range cmds {
@@ -160,7 +167,11 @@ such as transfer.sh using curl or similar.  For example:
 
 // getNodeContainerLogs will attempt to grab logs for any "calico" named containers for hosted installs.
 func getNodeContainerLogs(logDir string) {
-	os.Mkdir(logDir, os.ModeDir)
+	err := os.Mkdir(logDir, os.ModeDir)
+	if err != nil {
+		fmt.Printf("Error creating log directory: %v\n", err)
+		return
+	}
 
 	// Get a list of Calico containers running on this Node.
 	result, err := exec.Command("docker", "ps", "-a", "--filter", "name=calico", "--format", "{{.Names}}: {{.CreatedAt}}").CombinedOutput()

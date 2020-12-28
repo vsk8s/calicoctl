@@ -17,7 +17,7 @@ package resourcemgr
 import (
 	"bytes"
 	"context"
-	"errors"
+	"encoding/json"
 	"fmt"
 	"io"
 	"os"
@@ -25,20 +25,22 @@ import (
 	"strings"
 	"time"
 
+	log "github.com/sirupsen/logrus"
+	v1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
+	"k8s.io/apimachinery/pkg/runtime"
+	"k8s.io/apimachinery/pkg/runtime/schema"
+	"k8s.io/apimachinery/pkg/util/strategicpatch"
+
 	"github.com/projectcalico/calicoctl/calicoctl/commands/argutils"
 	yamlsep "github.com/projectcalico/calicoctl/calicoctl/util/yaml"
 	yaml "github.com/projectcalico/go-yaml-wrapper"
 	api "github.com/projectcalico/libcalico-go/lib/apis/v3"
 	client "github.com/projectcalico/libcalico-go/lib/clientv3"
 	cerrors "github.com/projectcalico/libcalico-go/lib/errors"
-	log "github.com/sirupsen/logrus"
-	v1 "k8s.io/apimachinery/pkg/apis/meta/v1"
-	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
-	"k8s.io/apimachinery/pkg/runtime"
-	"k8s.io/apimachinery/pkg/runtime/schema"
 )
 
-// The ResourceManager interface provides useful function for each resource type.  This includes:
+// ResourceManager provides a useful function for each resource type.  This includes:
 //	-  Commands to assist with generation of table output format of resources
 //	-  Commands to manage resource instances through an un-typed interface.
 type ResourceManager interface {
@@ -51,15 +53,16 @@ type ResourceManager interface {
 	Update(ctx context.Context, client client.Interface, resource ResourceObject) (ResourceObject, error)
 	Delete(ctx context.Context, client client.Interface, resource ResourceObject) (ResourceObject, error)
 	GetOrList(ctx context.Context, client client.Interface, resource ResourceObject) (runtime.Object, error)
+	Patch(ctx context.Context, client client.Interface, resource ResourceObject, patch string) (ResourceObject, error)
 }
 
-// All Calico resources implement the resource interface.
+// ResourceObject is implemented by all Calico resources
 type ResourceObject interface {
 	runtime.Object
 	v1.ObjectMetaAccessor
 }
 
-// All Calico resources list implement the resource interface.
+// ResourceListObject is implemented by all Calico resources lists
 type ResourceListObject interface {
 	runtime.Object
 	v1.ListMetaAccessor
@@ -93,12 +96,12 @@ type resourceHelper struct {
 	list              ResourceListActionCommand
 }
 
-func (r resourceHelper) String() string {
-	if !r.isList {
-		return fmt.Sprintf("Resource(%s %s)", r.resource.GetObjectKind(), r.resource.GetObjectKind().GroupVersionKind())
+func (rh resourceHelper) String() string {
+	if !rh.isList {
+		return fmt.Sprintf("Resource(%s %s)", rh.resource.GetObjectKind(), rh.resource.GetObjectKind().GroupVersionKind())
 
 	}
-	return fmt.Sprintf("Resource(%s %s)", r.listResource.GetObjectKind(), r.listResource.GetListMeta().GetResourceVersion())
+	return fmt.Sprintf("Resource(%s %s)", rh.listResource.GetObjectKind(), rh.listResource.GetListMeta().GetResourceVersion())
 }
 
 // Store a resourceHelper for each resource.
@@ -283,7 +286,50 @@ func (rh resourceHelper) GetOrList(ctx context.Context, client client.Interface,
 	return rh.list(ctx, client, resource)
 }
 
-// Return the Resource Manager for a particular resource type.
+// Patch is an un-typed method to patch an existing resource.
+// It currently take a partial JSON object and attempts to perform a strategic merge
+// on the existing resource.
+func (rh resourceHelper) Patch(ctx context.Context, client client.Interface, resource ResourceObject, patch string) (ResourceObject, error) {
+	ro, err := rh.get(ctx, client, resource)
+	if err != nil {
+		return ro, err
+	}
+
+	resource = mergeMetadataForUpdate(ro, resource)
+
+	// Marshal original obj for comparison
+	original, err := json.Marshal(ro)
+	if err != nil {
+		return resource, fmt.Errorf("marshalling original resource: %v", err)
+	}
+
+	// perform strategic merge
+	patched, err := strategicpatch.StrategicMergePatch(original, []byte(patch), ro.DeepCopyObject())
+	if err != nil {
+		return resource, fmt.Errorf("permorming strategic merge patch: %v", err)
+	}
+
+	// convert patched data to resource
+	resources, err := createResourcesFromBytes(patched)
+	if err != nil {
+		return resource, fmt.Errorf("creating resource from patched data: %v", err)
+	}
+
+	if len(resources) < 1 {
+		return resource, fmt.Errorf("invalid number of patched resources: %v", len(resources))
+	}
+
+	resource = resources[0].(ResourceObject)
+
+	resource, err = rh.update(ctx, client, resource)
+	if err != nil {
+		return resource, fmt.Errorf("updating existing resource: %v", err)
+	}
+
+	return resource, nil
+}
+
+// GetResourceManager returns the Resource Manager for a particular resource type.
 func GetResourceManager(resource runtime.Object) ResourceManager {
 	return helpers[resource.GetObjectKind().GroupVersionKind()]
 }
@@ -341,7 +387,7 @@ func (rh resourceHelper) IsNamespaced() bool {
 func newResource(tm schema.GroupVersionKind) (runtime.Object, error) {
 	rh, ok := helpers[tm]
 	if !ok {
-		return nil, errors.New(fmt.Sprintf("Unknown resource type (%s) and/or version (%s)", tm.Kind, tm.GroupVersion().String()))
+		return nil, fmt.Errorf("Unknown resource type (%s) and/or version (%s)", tm.Kind, tm.GroupVersion().String())
 	}
 	log.Infof("Found resource helper: %s", rh)
 
@@ -354,10 +400,8 @@ func newResource(tm schema.GroupVersionKind) (runtime.Object, error) {
 	_, ok = new.Interface().(ResourceObject)
 	if ok {
 		return new.Interface().(ResourceObject), nil
-	} else {
-		return new.Interface().(ResourceListObject), nil
 	}
-
+	return new.Interface().(ResourceListObject), nil
 }
 
 // Create the resource from the specified byte array encapsulating the resource.
@@ -433,7 +477,7 @@ func unmarshalSliceOfResources(tml []unstructured.Unstructured, b []byte) ([]run
 	return unpacked, nil
 }
 
-// Create the Resource from the specified file f.
+// CreateResourcesFromFile creates the Resource from the specified file f.
 // 	-  The file format may be JSON or YAML encoding of either a single resource or list of
 // 	   resources as defined by the API objects in /api.
 // 	-  A filename of "-" means "Read from stdin".
@@ -540,7 +584,7 @@ func (rh resourceHelper) GetTableTemplate(headings []string, printNamespace bool
 	return buf.String(), nil
 }
 
-// mergeMetadataForUpdate merges the Metadata for a stored ResourceObject and a potentail
+// mergeMetadataForUpdate merges the Metadata for a stored ResourceObject and a potential
 // update. All metadata in the potential update will be overwritten by the stored object
 // except for Labels and Annotations. This prevents accidental modifications to the metadata
 // fields by forcing updates to those fields to be handled by internal or more involved

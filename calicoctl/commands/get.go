@@ -1,4 +1,4 @@
-// Copyright (c) 2016-2019 Tigera, Inc. All rights reserved.
+// Copyright (c) 2016-2020 Tigera, Inc. All rights reserved.
 
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -20,29 +20,36 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/projectcalico/calicoctl/calicoctl/commands/argutils"
-	"github.com/projectcalico/calicoctl/calicoctl/commands/constants"
-
 	log "github.com/sirupsen/logrus"
+
+	"github.com/projectcalico/calicoctl/calicoctl/commands/argutils"
+	"github.com/projectcalico/calicoctl/calicoctl/commands/common"
+	"github.com/projectcalico/calicoctl/calicoctl/commands/constants"
+	"github.com/projectcalico/calicoctl/calicoctl/util"
 )
 
 func Get(args []string) error {
 	doc := constants.DatastoreIntro + `Usage:
-  calicoctl get ( (<KIND> [<NAME>...]) |
-                --filename=<FILENAME>)
+  <BINARY_NAME> get ( (<KIND> [<NAME>...]) |
+                --filename=<FILENAME> [--recursive] [--skip-empty] )
                 [--output=<OUTPUT>] [--config=<CONFIG>] [--namespace=<NS>] [--all-namespaces] [--export]
 
 Examples:
   # List all policy in default output format.
-  calicoctl get policy
+  <BINARY_NAME> get policy
 
   # List specific policies in YAML format
-  calicoctl get -o yaml policy my-policy-1 my-policy-2
+  <BINARY_NAME> get -o yaml policy my-policy-1 my-policy-2
 
 Options:
   -h --help                    Show this screen.
   -f --filename=<FILENAME>     Filename to use to get the resource.  If set to
-                               "-" loads from stdin.
+                               "-" loads from stdin. If filename is a directory, this command is
+                               invoked for each .json .yaml and .yml file within that directory,
+                               terminating after the first failure.
+  -R --recursive               Process the filename specified in -f or --filename recursively.
+     --skip-empty              Do not error if any files or directory specified using -f or --filename contain no
+                               data.
   -o --output=<OUTPUT FORMAT>  Output format.  One of: yaml, json, ps, wide,
                                custom-columns=..., go-template=...,
                                go-template-file=...   [Default: ps]
@@ -71,6 +78,7 @@ Description:
     * globalNetworkSet
     * hostEndpoint
     * ipPool
+    * kubeControllersConfiguration
     * networkPolicy
     * networkSet
     * node
@@ -111,6 +119,10 @@ Description:
   for the golang template definitions) and the valid column names (required for
   the custom-columns option).
 `
+	// Replace all instances of BINARY_NAME with the name of the binary.
+	name, _ := util.NameAndDescription()
+	doc = strings.ReplaceAll(doc, "<BINARY_NAME>", name)
+
 	parsedArgs, err := docopt.Parse(doc, args, true, "", false, false)
 	if err != nil {
 		return fmt.Errorf("Invalid option: 'calicoctl %s'. Use flag '--help' to read about a specific subcommand.", strings.Join(args, " "))
@@ -124,17 +136,17 @@ Description:
 		printNamespace = true
 	}
 
-	var rp resourcePrinter
+	var rp common.ResourcePrinter
 	output := parsedArgs["--output"].(string)
 	switch output {
 	case "yaml", "yml":
-		rp = resourcePrinterYAML{}
+		rp = common.ResourcePrinterYAML{}
 	case "json":
-		rp = resourcePrinterJSON{}
+		rp = common.ResourcePrinterJSON{}
 	case "ps":
-		rp = resourcePrinterTable{wide: false, printNamespace: printNamespace}
+		rp = common.ResourcePrinterTable{Wide: false, PrintNamespace: printNamespace}
 	case "wide":
-		rp = resourcePrinterTable{wide: true, printNamespace: printNamespace}
+		rp = common.ResourcePrinterTable{Wide: true, PrintNamespace: printNamespace}
 	default:
 		// Output format may be a key=value pair, so split on "=" to find out.  Pull
 		// out the key and value, and split the value by "," as some options allow
@@ -153,17 +165,17 @@ Description:
 			if outputValue == "" {
 				return fmt.Errorf("need to specify a template")
 			}
-			rp = resourcePrinterTemplate{template: outputValue}
+			rp = common.ResourcePrinterTemplate{Template: outputValue}
 		case "go-template-file":
 			if outputValue == "" {
 				return fmt.Errorf("need to specify a template file")
 			}
-			rp = resourcePrinterTemplateFile{templateFile: outputValue}
+			rp = common.ResourcePrinterTemplateFile{TemplateFile: outputValue}
 		case "custom-columns":
 			if outputValue == "" {
 				return fmt.Errorf("need to specify at least one column")
 			}
-			rp = resourcePrinterTable{headings: outputValues}
+			rp = common.ResourcePrinterTable{Headings: outputValues}
 		}
 	}
 
@@ -171,26 +183,26 @@ Description:
 		return fmt.Errorf("unrecognized output format '%s'", output)
 	}
 
-	results := executeConfigCommand(parsedArgs, actionGetOrList)
+	results := common.ExecuteConfigCommand(parsedArgs, common.ActionGetOrList)
 
 	log.Infof("results: %+v", results)
 
-	if results.fileInvalid {
-		return fmt.Errorf("Failed to execute command: %v", results.err)
-	} else if results.err != nil {
-		return fmt.Errorf("Failed to get resources: %v", results.err)
+	if results.FileInvalid {
+		return fmt.Errorf("Failed to execute command: %v", results.Err)
+	} else if results.Err != nil {
+		return fmt.Errorf("Failed to get resources: %v", results.Err)
 	}
 
-	err = rp.print(results.client, results.resources)
+	err = rp.Print(results.Client, results.Resources)
 	if err != nil {
 		return err
 	}
 
-	if len(results.resErrs) > 0 {
+	if len(results.ResErrs) > 0 {
 		var errStr string
-		for i, err := range results.resErrs {
+		for i, err := range results.ResErrs {
 			errStr += err.Error()
-			if (i + 1) != len(results.resErrs) {
+			if (i + 1) != len(results.ResErrs) {
 				errStr += "\n"
 			}
 		}

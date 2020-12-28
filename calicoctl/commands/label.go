@@ -1,4 +1,4 @@
-// Copyright (c) 2016-2019 Tigera, Inc. All rights reserved.
+// Copyright (c) 2016-2020 Tigera, Inc. All rights reserved.
 
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -19,31 +19,34 @@ import (
 	"strings"
 
 	docopt "github.com/docopt/docopt-go"
+
+	"github.com/projectcalico/calicoctl/calicoctl/commands/common"
 	"github.com/projectcalico/calicoctl/calicoctl/commands/constants"
 	"github.com/projectcalico/calicoctl/calicoctl/resourcemgr"
+	"github.com/projectcalico/calicoctl/calicoctl/util"
 
 	log "github.com/sirupsen/logrus"
 )
 
 func Label(args []string) error {
 	doc := constants.DatastoreIntro + `Usage:
-  calicoctl label (<KIND> <NAME> 
+  <BINARY_NAME> label (<KIND> <NAME>
   	              ( <key>=<value> [--overwrite] |
   	                <key> --remove )
                   [--config=<CONFIG>] [--namespace=<NS>])
-                  
+
 
 
 
 Examples:
   # Label a workload endpoint
-  calicoctl label workloadendpoints nginx --namespace=default app=web
+  <BINARY_NAME> label workloadendpoints nginx --namespace=default app=web
 
   # Label a node and overwrite the original value of key 'cluster'
-  calicoctl label nodes node1 cluster=frontend --overwrite
+  <BINARY_NAME> label nodes node1 cluster=frontend --overwrite
 
   # Remove label with key 'cluster' of the node
-  calicoctl label nodes node1 cluster --remove
+  <BINARY_NAME> label nodes node1 cluster --remove
 
 Options:
   -h --help                    Show this screen.
@@ -72,6 +75,7 @@ Description:
     * globalNetworkSet
     * hostEndpoint
     * ipPool
+    * kubeControllersConfiguration
     * networkPolicy
     * node
     * profile
@@ -85,8 +89,11 @@ Description:
 
   When labeling a resource on an existing key:
   - gets an error if option --overwrite is not provided.
-  - value of the key updates to specified value if option --overwrite is provided. 
+  - value of the key updates to specified value if option --overwrite is provided.
   `
+	// Replace all instances of BINARY_NAME with the name of the binary.
+	binaryName, _ := util.NameAndDescription()
+	doc = strings.ReplaceAll(doc, "<BINARY_NAME>", binaryName)
 
 	parsedArgs, err := docopt.Parse(doc, args, true, "", false, false)
 	if err != nil {
@@ -118,21 +125,21 @@ Description:
 
 	// TODO: add more validation on key/value?
 
-	results := executeConfigCommand(parsedArgs, actionGetOrList)
-	if results.fileInvalid {
-		return fmt.Errorf("Failed to execute command: %v", results.err)
-	} else if results.err != nil {
+	results := common.ExecuteConfigCommand(parsedArgs, common.ActionGetOrList)
+	if results.FileInvalid {
+		return fmt.Errorf("Failed to execute command: %v", results.Err)
+	} else if results.Err != nil {
 		return fmt.Errorf("failed to get %s %s, error %v",
-			kind, name, results.err)
-	} else if len(results.resources) == 0 {
+			kind, name, results.Err)
+	} else if len(results.Resources) == 0 {
 		return fmt.Errorf("%s %s not found", kind, name)
 	}
 
-	resource := results.resources[0].(resourcemgr.ResourceObject)
+	resource := results.Resources[0].(resourcemgr.ResourceObject)
 	labels := resource.GetObjectMeta().GetLabels()
 	overwrite := parsedArgs["--overwrite"].(bool)
 	overwritten := false
-	client := results.client
+	client := results.Client
 	if labels == nil {
 		labels = make(map[string]string)
 	}
@@ -164,7 +171,7 @@ Description:
 	}
 
 	resource.GetObjectMeta().SetLabels(labels)
-	_, err = executeResourceAction(parsedArgs, client, resource, actionUpdate)
+	_, err = common.ExecuteResourceAction(parsedArgs, client, resource, common.ActionUpdate)
 	if err != nil {
 		return fmt.Errorf("failed to update %s %s, label not changed", kind, name)
 	}

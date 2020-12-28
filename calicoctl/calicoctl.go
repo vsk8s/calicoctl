@@ -20,27 +20,34 @@ import (
 	"strings"
 
 	"github.com/docopt/docopt-go"
-	"github.com/projectcalico/calicoctl/calicoctl/commands"
 	log "github.com/sirupsen/logrus"
+
+	"github.com/projectcalico/calicoctl/calicoctl/commands"
+	"github.com/projectcalico/calicoctl/calicoctl/util"
 )
 
 func main() {
-	doc := `Usage:
-  calicoctl [options] <command> [<args>...]
+	name, desc := util.NameAndDescription()
+	doc := fmt.Sprintf(`Usage:
+  <BINARY_NAME> [options] <command> [<args>...]
 
-    create    Create a resource by filename or stdin.
-    replace   Replace a resource by filename or stdin.
-    apply     Apply a resource by filename or stdin.  This creates a resource
-              if it does not exist, and replaces a resource if it does exists.
-    delete    Delete a resource identified by file, stdin or resource type and
-              name.
-    get       Get a resource identified by file, stdin or resource type and
-              name.
-    label     Add or update labels of resources.
-    convert   Convert config files between different API versions.
-    ipam      IP address management.
-    node      Calico node management.
-    version   Display the version of calicoctl.
+    create       Create a resource by file, directory or stdin.
+    replace      Replace a resource by file, directory or stdin.
+    apply        Apply a resource by file, directory or stdin.  This creates a resource
+                 if it does not exist, and replaces a resource if it does exists.
+    patch        Patch a pre-exisiting resource in place.
+    delete       Delete a resource identified by file, directory, stdin or resource type and
+                 name.
+    get          Get a resource identified by file, directory, stdin or resource type and
+                 name.
+    label        Add or update labels of resources.
+    convert      Convert config files between different API versions.
+    ipam         IP address management.
+    node         Calico node management.
+    version      Display the version of this binary.
+    export       Export the Calico datastore objects for migration
+    import       Import the Calico datastore objects for migration
+    datastore    Calico datastore management.
 
 Options:
   -h --help               Show this screen.
@@ -48,17 +55,21 @@ Options:
                           warn, info, debug) [default: panic]
 
 Description:
-  The calicoctl command line tool is used to manage Calico network and security
+  The %s is used to manage Calico network and security
   policy, to view and manage endpoint configuration, and to manage a Calico
   node instance.
 
-  See 'calicoctl <command> --help' to read about a specific subcommand.
-`
+  See '<BINARY_NAME> <command> --help' to read about a specific subcommand.
+`, desc)
+
+	// Replace all instances of BINARY_NAME with the name of the binary.
+	doc = strings.ReplaceAll(doc, "<BINARY_NAME>", name)
+
 	arguments, err := docopt.Parse(doc, nil, true, commands.VERSION_SUMMARY, true, false)
 	if err != nil {
 		if _, ok := err.(*docopt.UserError); ok {
 			// the user gave us bad input
-			fmt.Printf("Invalid option: 'calicoctl %s'. Use flag '--help' to read about a specific subcommand.\n", strings.Join(os.Args[1:], " "))
+			fmt.Printf("Invalid option: '%s'. Use flag '--help' to read about a specific subcommand.\n", strings.Join(os.Args[1:], " "))
 		}
 		os.Exit(1)
 	}
@@ -88,6 +99,8 @@ Description:
 			err = commands.Replace(args)
 		case "apply":
 			err = commands.Apply(args)
+		case "patch":
+			err = commands.Patch(args)
 		case "delete":
 			err = commands.Delete(args)
 		case "get":
@@ -102,6 +115,8 @@ Description:
 			err = commands.Node(args)
 		case "ipam":
 			err = commands.IPAM(args)
+		case "datastore":
+			err = commands.Datastore(args)
 		default:
 			err = fmt.Errorf("Unknown command: %q\n%s", command, doc)
 		}

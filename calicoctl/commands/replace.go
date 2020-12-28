@@ -1,4 +1,4 @@
-// Copyright (c) 2016-2019 Tigera, Inc. All rights reserved.
+// Copyright (c) 2016-2020 Tigera, Inc. All rights reserved.
 
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -21,25 +21,34 @@ import (
 
 	"fmt"
 
-	"github.com/projectcalico/calicoctl/calicoctl/commands/constants"
 	log "github.com/sirupsen/logrus"
+
+	"github.com/projectcalico/calicoctl/calicoctl/commands/common"
+	"github.com/projectcalico/calicoctl/calicoctl/commands/constants"
+	"github.com/projectcalico/calicoctl/calicoctl/util"
 )
 
 func Replace(args []string) error {
 	doc := constants.DatastoreIntro + `Usage:
-  calicoctl replace --filename=<FILENAME> [--config=<CONFIG>] [--namespace=<NS>]
+  <BINARY_NAME> replace --filename=<FILENAME> [--recursive] [--skip-empty]
+                    [--config=<CONFIG>] [--namespace=<NS>]
 
 Examples:
   # Replace a policy using the data in policy.yaml.
-  calicoctl replace -f ./policy.yaml
+  <BINARY_NAME> replace -f ./policy.yaml
 
   # Replace a policy based on the JSON passed into stdin.
-  cat policy.json | calicoctl replace -f -
+  cat policy.json | <BINARY_NAME> replace -f -
 
 Options:
   -h --help                  Show this screen.
   -f --filename=<FILENAME>   Filename to use to replace the resource.  If set
-                             to "-" loads from stdin.
+                             to "-" loads from stdin. If filename is a directory, this command is
+                             invoked for each .json .yaml and .yml file within that directory,
+                             terminating after the first failure.
+  -R --recursive             Process the filename specified in -f or --filename recursively.
+     --skip-empty            Do not error if any files or directory specified using -f or --filename contain no
+                             data.
   -c --config=<CONFIG>       Path to the file containing connection
                              configuration in YAML or JSON format.
                              [default: ` + constants.DefaultConfigPath + `]
@@ -60,6 +69,7 @@ Description:
     * globalNetworkSet
     * hostEndpoint
     * ipPool
+    * kubeControllersConfiguration
     * networkPolicy
     * networkSet
     * node
@@ -70,7 +80,7 @@ Description:
   terminating error.
 
   The output of the command indicates how many resources were successfully
-  eplaced, and the error reason if an error occurred.
+  replaced, and the error reason if an error occurred.
 
   The resources are replaced in the order they are specified.  In the event of
   a failure replacing a specific resource it is possible to work out which
@@ -79,6 +89,10 @@ Description:
   When replacing a resource, the complete resource spec must be provided, it is
   not sufficient to supply only the fields that are being updated.
 `
+	// Replace all instances of BINARY_NAME with the name of the binary.
+	name, _ := util.NameAndDescription()
+	doc = strings.ReplaceAll(doc, "<BINARY_NAME>", name)
+
 	parsedArgs, err := docopt.Parse(doc, args, true, "", false, false)
 	if err != nil {
 		return fmt.Errorf("Invalid option: 'calicoctl %s'. Use flag '--help' to read about a specific subcommand.", strings.Join(args, " "))
@@ -87,37 +101,41 @@ Description:
 		return nil
 	}
 
-	results := executeConfigCommand(parsedArgs, actionUpdate)
+	results := common.ExecuteConfigCommand(parsedArgs, common.ActionUpdate)
 	log.Infof("results: %+v", results)
 
-	if results.fileInvalid {
-		return fmt.Errorf("Failed to execute command: %v", results.err)
-	} else if results.numHandled == 0 {
-		if results.numResources == 0 {
-			return fmt.Errorf("No resources specified in file")
-		} else if results.numResources == 1 {
-			return fmt.Errorf("Failed to replace '%s' resource: %v", results.singleKind, results.err)
-		} else if results.singleKind != "" {
-			return fmt.Errorf("Failed to replace any '%s' resources: %v", results.singleKind, results.err)
-		} else {
-			return fmt.Errorf("Failed to replace any resources: %v", results.err)
+	if results.FileInvalid {
+		return fmt.Errorf("Failed to execute command: %v", results.Err)
+	} else if results.NumResources == 0 {
+		// No resources specified. If there is an associated error use that, otherwise print message with no error.
+		if results.Err != nil {
+			return results.Err
 		}
-	} else if results.err == nil {
-		if results.singleKind != "" {
-			fmt.Printf("Successfully replaced %d '%s' resource(s)\n", results.numHandled, results.singleKind)
+		fmt.Println("No resources specified")
+	} else if results.NumHandled == 0 {
+		if results.NumResources == 1 {
+			return fmt.Errorf("Failed to replace '%s' resource: %v", results.SingleKind, results.Err)
+		} else if results.SingleKind != "" {
+			return fmt.Errorf("Failed to replace any '%s' resources: %v", results.SingleKind, results.Err)
 		} else {
-			fmt.Printf("Successfully replaced %d resource(s)\n", results.numHandled)
+			return fmt.Errorf("Failed to replace any resources: %v", results.Err)
+		}
+	} else if results.Err == nil {
+		if results.SingleKind != "" {
+			fmt.Printf("Successfully replaced %d '%s' resource(s)\n", results.NumHandled, results.SingleKind)
+		} else {
+			fmt.Printf("Successfully replaced %d resource(s)\n", results.NumHandled)
 		}
 	} else {
 		fmt.Printf("Partial success: ")
-		if results.singleKind != "" {
+		if results.SingleKind != "" {
 			fmt.Printf("replaced the first %d out of %d '%s' resources:\n",
-				results.numHandled, results.numResources, results.singleKind)
+				results.NumHandled, results.NumResources, results.SingleKind)
 		} else {
 			fmt.Printf("replaced the first %d out of %d resources:\n",
-				results.numHandled, results.numResources)
+				results.NumHandled, results.NumResources)
 		}
-		return fmt.Errorf("Hit error: %v", results.err)
+		return fmt.Errorf("Hit error: %v", results.Err)
 	}
 
 	return nil

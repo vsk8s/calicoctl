@@ -1,4 +1,4 @@
-// Copyright (c) 2016 Tigera, Inc. All rights reserved.
+// Copyright (c) 2016-2019 Tigera, Inc. All rights reserved.
 
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -26,29 +26,30 @@ import (
 	"time"
 
 	"github.com/docopt/docopt-go"
+	log "github.com/sirupsen/logrus"
+
 	"github.com/projectcalico/calicoctl/calicoctl/commands/argutils"
 	"github.com/projectcalico/calicoctl/calicoctl/commands/clientmgr"
 	"github.com/projectcalico/calicoctl/calicoctl/commands/constants"
+	"github.com/projectcalico/calicoctl/calicoctl/util"
 	"github.com/projectcalico/libcalico-go/lib/apiconfig"
 	"github.com/projectcalico/libcalico-go/lib/names"
 	"github.com/projectcalico/libcalico-go/lib/net"
-	log "github.com/sirupsen/logrus"
 )
 
 const (
 	ETCD_KEY_NODE_FILE                  = "/etc/calico/certs/key.pem"
 	ETCD_CERT_NODE_FILE                 = "/etc/calico/certs/cert.crt"
 	ETCD_CA_CERT_NODE_FILE              = "/etc/calico/certs/ca_cert.crt"
+	FELIX_CONFIG_NODE_FILE              = "/etc/calico/felix.cfg"
 	AUTODETECTION_METHOD_FIRST          = "first-found"
 	AUTODETECTION_METHOD_CAN_REACH      = "can-reach="
 	AUTODETECTION_METHOD_INTERFACE      = "interface="
 	AUTODETECTION_METHOD_SKIP_INTERFACE = "skip-interface="
-	DEFAULT_DOCKER_IFPREFIX             = "cali"
 )
 
 var (
 	checkLogTimeout = 10 * time.Second
-	ifprefixMatch   = regexp.MustCompile(`^[a-zA-Z0-9]+$`)
 	backendMatch    = regexp.MustCompile("^(none|bird|gobgp)$")
 )
 
@@ -56,7 +57,7 @@ var (
 func Run(args []string) error {
 	var err error
 	doc := `Usage:
-  calicoctl node run [--ip=<IP>] [--ip6=<IP6>] [--as=<AS_NUM>]
+  <BINARY_NAME> node run [--ip=<IP>] [--ip6=<IP6>] [--as=<AS_NUM>]
                      [--name=<NAME>]
                      [--ip-autodetection-method=<IP_AUTODETECTION_METHOD>]
                      [--ip6-autodetection-method=<IP6_AUTODETECTION_METHOD>]
@@ -64,12 +65,10 @@ func Run(args []string) error {
                      [--node-image=<DOCKER_IMAGE_NAME>]
                      [--backend=(bird|gobgp|none)]
                      [--config=<CONFIG>]
+                     [--felix-config=<CONFIG>]
                      [--no-default-ippools]
                      [--dryrun]
                      [--init-system]
-                     [--disable-docker-networking]
-                     [--docker-networking-ifprefix=<IFPREFIX>]
-                     [--use-docker-networking-container-labels]
 
 Options:
   -h --help                Show this screen.
@@ -79,7 +78,6 @@ Options:
                            will use the value configured on the node resource.
                            If there is no configured value and --as option is
                            omitted, the node will inherit the global AS number
-                           (see 'calicoctl config' for details).
      --ip=<IP>             Set the local IPv4 routing address for this node.
                            If omitted, it will use the value configured on the
                            node resource.  If there is no configured value
@@ -109,7 +107,7 @@ Options:
                              destination IP or domain name.
                            > interface=<IFACE NAME REGEX LIST>
                              Use the first valid IP address found on interfaces
-                             named as per the first matching supplied interface 
+                             named as per the first matching supplied interface
 			     name regex. Regexes are separated by commas
 			     (e.g. eth.*,enp0s.*).
 			   > skip-interface=<IFACE NAME REGEX LIST>
@@ -142,28 +140,21 @@ Options:
      --no-default-ippools  Do not create default pools upon startup.
                            Default IP pools will be created if this is not set
                            and there are no pre-existing Calico IP pools.
-     --disable-docker-networking
-                           Disable Docker networking.
-     --docker-networking-ifprefix=<IFPREFIX>
-                           Interface prefix to use for the network interface
-                           within the Docker containers that have been networked
-                           by the Calico driver.
-                           [default: ` + DEFAULT_DOCKER_IFPREFIX + `]
-     --use-docker-networking-container-labels
-                           Extract the Calico-namespaced Docker container labels
-                           (org.projectcalico.label.*) and apply them to the
-                           container endpoints for use with Calico policy.
-                           When this option is enabled traffic must be
-                           explicitly allowed by configuring Calico policies
-                           and Calico profiles are disabled.
   -c --config=<CONFIG>     Path to the file containing connection
                            configuration in YAML or JSON format.
                            [default: ` + constants.DefaultConfigPath + `]
+     --felix-config=<CONFIG>
+                            Path to the file containing Felix
+                            configuration in YAML or JSON format.
 
 Description:
   This command is used to start a calico/node container instance which provides
   Calico networking and network policy on your compute host.
 `
+	// Replace all instances of BINARY_NAME with the name of the binary.
+	binaryName, _ := util.NameAndDescription()
+	doc = strings.ReplaceAll(doc, "<BINARY_NAME>", binaryName)
+
 	arguments, err := docopt.Parse(doc, args, true, "", false, false)
 	if err != nil {
 		log.Info(err)
@@ -186,10 +177,8 @@ Description:
 	name := argutils.ArgStringOrBlank(arguments, "--name")
 	nopools := argutils.ArgBoolOrFalse(arguments, "--no-default-ippools")
 	config := argutils.ArgStringOrBlank(arguments, "--config")
-	disableDockerNw := argutils.ArgBoolOrFalse(arguments, "--disable-docker-networking")
+	felixConfig := argutils.ArgStringOrBlank(arguments, "--felix-config")
 	initSystem := argutils.ArgBoolOrFalse(arguments, "--init-system")
-	ifprefix := argutils.ArgStringOrBlank(arguments, "--docker-networking-ifprefix")
-	useDockerContainerLabels := argutils.ArgBoolOrFalse(arguments, "--use-docker-networking-container-labels")
 
 	// Validate parameters.
 	if ipv4 != "" && ipv4 != "autodetect" {
@@ -247,28 +236,8 @@ Description:
 	envs := map[string]string{
 		"NODENAME":                  name,
 		"CALICO_NETWORKING_BACKEND": backend,
-		"CALICO_LIBNETWORK_ENABLED": fmt.Sprint(!disableDockerNw),
 	}
 
-	// Validate the ifprefix to only allow alphanumeric characters
-	if !ifprefixMatch.MatchString(ifprefix) {
-		return fmt.Errorf("Error executing command: invalid interface prefix '%s'", ifprefix)
-	}
-
-	if disableDockerNw && useDockerContainerLabels {
-		return fmt.Errorf("Error executing command: invalid to disable Docker Networking and enable Container labels")
-	}
-
-	// Set CALICO_LIBNETWORK_IFPREFIX env variable if Docker network is enabled and set to non-default value.
-	if !disableDockerNw && ifprefix != DEFAULT_DOCKER_IFPREFIX {
-		envs["CALICO_LIBNETWORK_IFPREFIX"] = ifprefix
-	}
-
-	// Add in optional environments.
-	if useDockerContainerLabels {
-		envs["CALICO_LIBNETWORK_CREATE_PROFILES"] = "false"
-		envs["CALICO_LIBNETWORK_LABEL_ENDPOINTS"] = "true"
-	}
 	if nopools {
 		envs["NO_DEFAULT_POOLS"] = "true"
 	}
@@ -303,10 +272,9 @@ Description:
 		{hostPath: "/run", containerPath: "/run"},
 	}
 
-	if !disableDockerNw {
-		log.Info("Include docker networking volume mounts")
-		vols = append(vols, vol{hostPath: "/run/docker/plugins", containerPath: "/run/docker/plugins"},
-			vol{hostPath: "/var/run/docker.sock", containerPath: "/var/run/docker.sock"})
+	// Attach Felix config if file path given
+	if felixConfig != "" {
+		vols = append(vols, vol{hostPath: felixConfig, containerPath: FELIX_CONFIG_NODE_FILE})
 	}
 
 	envs["ETCD_ENDPOINTS"] = etcdcfg.EtcdEndpoints
@@ -425,7 +393,10 @@ Description:
 	// Protect against calico processes taking too long to start, or docker
 	// logs hanging without output.
 	time.AfterFunc(checkLogTimeout, func() {
-		logCmd.Process.Kill()
+		err = logCmd.Process.Kill()
+		if err != nil {
+			fmt.Printf("Error attempting to kill process: check logs for details")
+		}
 	})
 
 	// Read stdout until the node fails, or until we see the output
@@ -441,8 +412,14 @@ Description:
 	}
 
 	// Kill the process if it is still running.
-	logCmd.Process.Kill()
-	logCmd.Wait()
+	err = logCmd.Process.Kill()
+	if err != nil {
+		return fmt.Errorf("Error attempting to kill process: check logs for details")
+	}
+	// Wait for the logging process to terminate.  We expect an error here, because we
+	// just killed it.
+	err = logCmd.Wait()
+	log.WithError(err).Info("Expected error after killing docker logs command")
 
 	// If we didn't successfully start then notify the user.
 	if outScanner.Err() != nil {
@@ -521,7 +498,7 @@ func validateIpAutodetectionMethod(method string, version int) error {
 		}
 
 		for _, ip := range ips {
-			cip := net.IP{ip}
+			cip := net.IP{IP: ip}
 			if cip.Version() == version {
 				return nil
 			}

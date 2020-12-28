@@ -1,4 +1,4 @@
-# Copyright (c) 2015-2019 Tigera, Inc. All rights reserved.
+# Copyright (c) 2015-2020 Tigera, Inc. All rights reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -133,6 +133,43 @@ bgppeer_name2_rev1_v6 = {
     },
 }
 
+bgppeer_invalid = {
+    'apiVersion': API_VERSION,
+    'kind': 'BGPPeer',
+    'metadata': {
+        'name': 'bgppeer-name-123abc',
+    },
+    'spec':  {
+        'node': 'node2',
+        'peerIP': 'badpeerIP',
+        'asNumber': 64515,
+    },
+}
+
+bgppeer_multiple_invalid = [{
+    'apiVersion': API_VERSION,
+    'kind': 'BGPPeer',
+    'metadata': {
+        'name': 'bgppeer-invalid1',
+    },
+    'spec':  {
+        'node': 'node1',
+        'peerIP': 'badpeerIP',
+        'asNumber': 64515,
+    },
+}, {
+    'apiVersion': API_VERSION,
+    'kind': 'BGPPeer',
+    'metadata': {
+        'name': 'bgppeer-invalid2',
+    },
+    'spec':  {
+        'node': 'node2',
+        'peerIP': 'badpeerIP',
+        'asNumber': 64515,
+    }
+}]
+
 #
 # Network Policy
 #
@@ -224,14 +261,6 @@ networkpolicy_name2_rev1 = {
             'name': 'endpoint1',
             'uid': 'test-uid-change',
         }],
-        'initializers': {
-            'pending': [{
-                'name': 'initializer1',
-            }],
-            'result': {
-                'status': 'test-status',
-            },
-        },
         'clusterName': 'cluster1',
         'labels': {'label1': 'l1', 'label2': 'l2'},
         'annotations': {'key': 'value'},
@@ -625,6 +654,46 @@ node_name3_rev1 = {
     }
 }
 
+node_name4_rev1 = {
+    'apiVersion': API_VERSION,
+    'kind': 'Node',
+    'metadata': {
+        'name': 'node4',
+    },
+    'spec': {
+        'bgp': {
+            'ipv4Address': '1.2.3.4/24',
+            'ipv6Address': 'aa:bb:cc::ff/120',
+        },
+        'orchRefs': [
+            {
+                'nodeName': 'node4',
+                'orchestrator': 'k8s',
+            },
+        ],
+    }
+}
+
+node_name5_rev1 = {
+    'apiVersion': API_VERSION,
+    'kind': 'Node',
+    'metadata': {
+        'name': 'node5',
+    },
+    'spec': {
+        'bgp': {
+            'ipv4Address': '1.2.3.5/24',
+            'ipv6Address': 'aa:bb:cc::ff/120',
+        },
+        'orchRefs': [
+            {
+                'nodeName': 'node4',
+                'orchestrator': 'k8s',
+            },
+        ],
+    }
+}
+
 #
 # BGPConfigs
 #
@@ -685,6 +754,28 @@ bgpconfig_name2_rev3 = {
     'spec': {
         'logSeverityScreen': 'Debug',
         'nodeToNodeMeshEnabled': True,
+    }
+}
+
+bgpconfig_name3_rev1 = {
+    'apiVersion': API_VERSION,
+    'kind': 'BGPConfiguration',
+    'metadata': {
+        'name': 'node.node5',
+    },
+    'spec': {
+        'logSeverityScreen': 'Debug',
+    }
+}
+
+bgpconfig_name4_rev1 = {
+    'apiVersion': API_VERSION,
+    'kind': 'BGPConfiguration',
+    'metadata': {
+        'name': 'node.node4',
+    },
+    'spec': {
+        'logSeverityScreen': 'Debug',
     }
 }
 
@@ -766,6 +857,98 @@ felixconfig_name1_rev3 = {
     }
 }
 
+felixconfig_name2_rev1 = {
+    'apiVersion': API_VERSION,
+    'kind': 'FelixConfiguration',
+    'metadata': {
+        'name': 'node.node5',
+    },
+    'spec': {
+        'chainInsertMode': 'append',
+        'defaultEndpointToHostAction': 'Accept',
+        'failsafeInboundHostPorts': [
+            {'protocol': 'TCP', 'port': 666},
+            {'protocol': 'UDP', 'port': 333}, ],
+        'failsafeOutboundHostPorts': [
+            {'protocol': 'TCP', 'port': 999},
+            {'protocol': 'UDP', 'port': 222},
+            {'protocol': 'UDP', 'port': 422}, ],
+        'interfacePrefix': 'humperdink',
+        'ipipMTU': 1521,
+        'ipsetsRefreshInterval': '44s',
+        'iptablesFilterAllowAction': 'Return',
+        'iptablesLockFilePath': '/run/fun',
+        'iptablesLockProbeInterval': '500ms',
+        'iptablesLockTimeout': '22s',
+        'iptablesMangleAllowAction': 'Accept',
+        'iptablesMarkMask': 0xff0000,
+        'iptablesPostWriteCheckInterval': '12s',
+        'iptablesRefreshInterval': '22s',
+        'ipv6Support': True,
+        'logFilePath': '/var/log/fun.log',
+        'logPrefix': 'say-hello-friend',
+        'logSeverityScreen': 'Info',
+        'maxIpsetSize': 8192,
+        'metadataAddr': '127.1.1.1',
+        'metadataPort': 8999,
+        'netlinkTimeout': '10s',
+        'prometheusGoMetricsEnabled': True,
+        'prometheusMetricsEnabled': True,
+        'prometheusMetricsPort': 11,
+        'prometheusProcessMetricsEnabled': True,
+        'reportingInterval': '10s',
+        'reportingTTL': '99s',
+        'routeRefreshInterval': '33s',
+        'usageReportingEnabled': False,
+    }
+}
+
+felixconfig_name3_rev1 = {
+    'apiVersion': API_VERSION,
+    'kind': 'FelixConfiguration',
+    'metadata': {
+        'name': 'node.node4',
+    },
+    'spec': {
+        'chainInsertMode': 'append',
+        'defaultEndpointToHostAction': 'Accept',
+        'failsafeInboundHostPorts': [
+            {'protocol': 'TCP', 'port': 666},
+            {'protocol': 'UDP', 'port': 333}, ],
+        'failsafeOutboundHostPorts': [
+            {'protocol': 'TCP', 'port': 999},
+            {'protocol': 'UDP', 'port': 222},
+            {'protocol': 'UDP', 'port': 422}, ],
+        'interfacePrefix': 'humperdink',
+        'ipipMTU': 1521,
+        'ipsetsRefreshInterval': '44s',
+        'iptablesFilterAllowAction': 'Return',
+        'iptablesLockFilePath': '/run/fun',
+        'iptablesLockProbeInterval': '500ms',
+        'iptablesLockTimeout': '22s',
+        'iptablesMangleAllowAction': 'Accept',
+        'iptablesMarkMask': 0xff0000,
+        'iptablesPostWriteCheckInterval': '12s',
+        'iptablesRefreshInterval': '22s',
+        'ipv6Support': True,
+        'logFilePath': '/var/log/fun.log',
+        'logPrefix': 'say-hello-friend',
+        'logSeverityScreen': 'Info',
+        'maxIpsetSize': 8192,
+        'metadataAddr': '127.1.1.1',
+        'metadataPort': 8999,
+        'netlinkTimeout': '10s',
+        'prometheusGoMetricsEnabled': True,
+        'prometheusMetricsEnabled': True,
+        'prometheusMetricsPort': 11,
+        'prometheusProcessMetricsEnabled': True,
+        'reportingInterval': '10s',
+        'reportingTTL': '99s',
+        'routeRefreshInterval': '33s',
+        'usageReportingEnabled': False,
+    }
+}
+
 #
 # ClusterInfo
 #
@@ -794,3 +977,49 @@ clusterinfo_name1_rev2 = {
     }
 }
 
+#
+# KubeControllersConfiguration
+#
+kubecontrollersconfig_name1_rev1 = {
+    'apiVersion': API_VERSION,
+    'kind': 'KubeControllersConfiguration',
+    'metadata': {
+        'name': 'default',
+    },
+    'spec': {
+        'logSeverityScreen': 'Info',
+        'controllers': {
+            'node': {
+                'syncLabels': 'Enabled',
+                'hostEndpoint': {
+                    'autoCreate': 'Disabled',
+                }
+            }
+        }
+    }
+}
+
+kubecontrollersconfig_name1_rev2 = {
+    'apiVersion': API_VERSION,
+    'kind': 'KubeControllersConfiguration',
+    'metadata': {
+        'name': 'default',
+    },
+    'spec': {
+        'logSeverityScreen': 'Debug',
+        'controllers': {
+            'node': {
+                'syncLabels': 'Enabled',
+                'hostEndpoint': {
+                    'autoCreate': 'Disabled',
+                }
+            },
+            'namespace': {},
+        }
+    },
+    'status': {
+        'environmentVars': {
+            'LOG_LEVEL': 'Info',
+        }
+    }
+}

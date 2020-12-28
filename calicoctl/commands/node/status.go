@@ -30,6 +30,7 @@ import (
 	"github.com/olekukonko/tablewriter"
 	gobgp "github.com/osrg/gobgp/client"
 	"github.com/osrg/gobgp/packet/bgp"
+	"github.com/projectcalico/calicoctl/calicoctl/util"
 	"github.com/shirou/gopsutil/process"
 	log "github.com/sirupsen/logrus"
 )
@@ -37,7 +38,7 @@ import (
 // Status prints status of the node and returns error (if any)
 func Status(args []string) error {
 	doc := `Usage:
-  calicoctl node status
+  <BINARY_NAME> node status
 
 Options:
   -h --help                 Show this screen.
@@ -46,6 +47,9 @@ Description:
   Check the status of the Calico node instance.  This includes the status and
   uptime of the node instance, and BGP peering states.
 `
+	// Replace all instances of BINARY_NAME with the name of the binary.
+	name, _ := util.NameAndDescription()
+	doc = strings.ReplaceAll(doc, "<BINARY_NAME>", name)
 
 	parsedArgs, err := docopt.Parse(doc, args, true, "", false, false)
 	if err != nil {
@@ -287,7 +291,10 @@ func scanBIRDPeers(ipv string, conn net.Conn) ([]bgpPeer, error) {
 	peers := []bgpPeer{}
 
 	// Set a time-out for reading from the socket connection.
-	conn.SetReadDeadline(time.Now().Add(birdTimeOut))
+	err := conn.SetReadDeadline(time.Now().Add(birdTimeOut))
+	if err != nil {
+		return nil, errors.New("failed to set time-out")
+	}
 
 	for scanner.Scan() {
 		// Process the next line that has been read by the scanner.
@@ -324,7 +331,10 @@ func scanBIRDPeers(ipv string, conn net.Conn) ([]bgpPeer, error) {
 
 		// Before reading the next line, adjust the time-out for
 		// reading from the socket connection.
-		conn.SetReadDeadline(time.Now().Add(birdTimeOut))
+		err = conn.SetReadDeadline(time.Now().Add(birdTimeOut))
+		if err != nil {
+			return nil, errors.New("failed to adjust time-out")
+		}
 	}
 
 	return peers, scanner.Err()

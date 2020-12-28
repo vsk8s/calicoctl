@@ -1,4 +1,4 @@
-# Copyright (c) 2015-2019 Tigera, Inc. All rights reserved.
+# Copyright (c) 2015-2020 Tigera, Inc. All rights reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -278,6 +278,42 @@ class TestCalicoctlCommands(TestBase):
         # Attempt to replace the (now deleted) resource.
         rc = calicoctl("replace", data=networkpolicy_name1_rev2)
         rc.assert_error(text=NOT_FOUND)
+
+    def test_create_single_invalid_resource(self):
+        """
+        Test that creating a single invalid resource returns an appropriate error
+        """
+        rc = calicoctl("create", data=bgppeer_invalid, format="json")
+        rc.assert_error(text="error with field PeerIP = 'badpeerIP'")
+        rc.assert_output_not_contains("Partial success")
+        rc.assert_output_contains("Failed to create 'BGPPeer' resource")
+
+    def test_create_all_invalid_resources(self):
+        """
+        Test that creating multiple invalid resources returns an appropriate error
+        """
+        rc = calicoctl("create", data=bgppeer_multiple_invalid, format="json")
+        rc.assert_error(text="error with field PeerIP = 'badpeerIP'")
+        rc.assert_output_not_contains("Partial success")
+        rc.assert_output_contains("Failed to create any 'BGPPeer' resources")
+
+    def test_apply_single_invalid_resource(self):
+        """
+        Test that applying a single invalid resource returns an appropriate error
+        """
+        rc = calicoctl("apply", data=bgppeer_invalid)
+        rc.assert_error(text="error with field PeerIP = 'badpeerIP'")
+        rc.assert_output_not_contains("Partial success")
+        rc.assert_output_contains("Failed to apply 'BGPPeer' resource")
+
+    def test_apply_all_invalid_resources(self):
+        """
+        Test that applying multiple invalid resources returns an appropriate error
+        """
+        rc = calicoctl("apply", data=bgppeer_multiple_invalid)
+        rc.assert_error(text="error with field PeerIP = 'badpeerIP'")
+        rc.assert_output_not_contains("Partial success")
+        rc.assert_output_contains("Failed to apply any 'BGPPeer' resources")
 
     def test_apply_with_resource_version(self):
         """
@@ -779,6 +815,42 @@ class TestCalicoctlCommands(TestBase):
         rc.assert_no_error()
         rc.assert_data(ci)  # Implicitly checks the GUID is still the same.
 
+    def test_kubecontrollersconfig(self):
+        """
+        Test CRUD commands behave as expected on the kube controllers configuration resource:
+        """
+        # Create a new default KubeControllersConfiguration and get it to determine the current
+        # resource version.
+        rc = calicoctl("create", data=kubecontrollersconfig_name1_rev1)
+        rc.assert_no_error()
+        rc = calicoctl(
+            "get kubecontrollersconfig %s -o yaml" % name(kubecontrollersconfig_name1_rev1))
+        rc.assert_no_error()
+        rev0 = rc.decoded
+
+        # Replace the KubeControllersConfiguration (with no resource version) and get it to
+        # assert the resource version is not the same.
+        rc = calicoctl("replace", data=kubecontrollersconfig_name1_rev2)
+        rc.assert_no_error()
+        rc = calicoctl(
+            "get kubecontrollersconfig %s -o yaml" % name(kubecontrollersconfig_name1_rev2))
+        rc.assert_no_error()
+        rev1 = rc.decoded
+        self.assertNotEqual(rev0['metadata']['resourceVersion'], rev1['metadata']['resourceVersion'])
+
+        # Apply an update to the KubeControllersConfiguration and assert the resource version is not the same.
+        rc = calicoctl("apply", data=kubecontrollersconfig_name1_rev1)
+        rc.assert_no_error()
+        rc = calicoctl(
+            "get kubecontrollersconfig %s -o yaml" % name(kubecontrollersconfig_name1_rev1))
+        rc.assert_no_error()
+        rev2 = rc.decoded
+        self.assertNotEqual(rev1['metadata']['resourceVersion'], rev2['metadata']['resourceVersion'])
+
+        # Delete the resource by name (i.e. without using a resource version).
+        rc = calicoctl("delete kubecontrollersconfig %s" % name(rev2))
+        rc.assert_no_error()
+
     @parameterized.expand([
         ('create', 'replace'),
         ('apply', 'apply'),
@@ -970,6 +1042,25 @@ class TestCalicoctlCommands(TestBase):
         rc.assert_output_contains("has(rr)")
         assert "global" not in rc.output
 
+    def test_bgppeer_password(self):
+        rc = calicoctl("create", data={
+            'apiVersion': API_VERSION,
+            'kind': 'BGPPeer',
+            'metadata': {
+                'name': 'bp1'
+            },
+            'spec': {
+                'password': {'secretKeyRef': {'name': 'bgp-passwords', 'key': 'bp1p'}},
+                'peerSelector': "has(rr)",
+            },
+        })
+        rc.assert_no_error()
+
+        rc = calicoctl("get bgpp")
+        rc.assert_no_error()
+        rc.assert_output_contains("bp1")
+        rc.assert_output_contains("global")
+
     def test_label_command(self):
         """
         Test calicoctl label command.
@@ -1023,10 +1114,45 @@ class TestCalicoctlCommands(TestBase):
         rc = calicoctl("label nodes node1 cluster --remove")
         rc.assert_error("can not remove label")
 
+    def test_patch(self):
+        """
+        Test that a basic CRUD flow for patch command works.
+        """
 
+        # test patching a node
+        rc = calicoctl("create", data=node_name1_rev1)
+        rc.assert_no_error()
 
+        rc = calicoctl("patch nodes node1 -p '{\"spec\":{\"bgp\": {\"routeReflectorClusterID\": \"192.168.0.1\"}}}'")
+        rc.assert_no_error()
 
-#
+        rc = calicoctl("get nodes node1 -o yaml")
+        rc.assert_no_error()
+        node1_rev1 = rc.decoded
+        self.assertEqual("192.168.0.1",node1_rev1['spec']['bgp']['routeReflectorClusterID'])
+
+        # test patching an ippool
+        rc = calicoctl("create", data=ippool_name1_rev1_v4)
+        rc.assert_no_error()
+
+        rc = calicoctl(
+                "patch ippool %s -p '{\"spec\":{\"natOutgoing\": true}}'" % name(ippool_name1_rev1_v4))
+        rc.assert_no_error()
+
+        rc = calicoctl(
+                "get ippool %s -o yaml" % name(ippool_name1_rev1_v4))
+        rc.assert_no_error()
+        ippool1_rev1 = rc.decoded
+        self.assertEqual(True,ippool1_rev1['spec']['natOutgoing'])
+
+        # test patching invalid networkpolicy
+        rc = calicoctl('create', data=networkpolicy_name2_rev1)
+        rc.assert_no_error()
+
+        rc = calicoctl(
+                "patch networkpolicy %s -p '{\"http\": {\"exact\": \"path/to/match\"}}'" % name(networkpolicy_name2_rev1))
+        rc.assert_error()
+
 #
 # class TestCreateFromFile(TestBase):
 #     """
@@ -2160,6 +2286,30 @@ class InvalidData(TestBase):
         '  resourceVersion: ' % (API_VERSION, testdata['kind'])
     )
 
+    def check_only_default_profile_returned(self, testdata):
+        out = calicoctl("get %s --output=yaml" % testdata['kind'])
+        out.assert_output_contains(
+        'apiVersion: %s\n'
+        'items:\n'
+        '- apiVersion: %s\n'
+        '  kind: %s\n'
+        '  metadata:\n'
+        '    creationTimestamp: null\n'
+        '    name: projectcalico-default-allow\n'
+        '    resourceVersion: "0"\n'
+        '  spec:\n'
+        '    egress:\n'
+        '    - action: Allow\n'
+        '      destination: {}\n'
+        '      source: {}\n'
+        '    ingress:\n'
+        '    - action: Allow\n'
+        '      destination: {}\n'
+        '      source: {}\n'
+        'kind: %sList\n'
+        'metadata:\n'
+        '  resourceVersion: ' % (API_VERSION, API_VERSION, testdata['kind'], testdata['kind'])
+    )
 
     @parameterized.expand(testdata)
     def test_invalid_profiles_rejected(self, name, testdata, error):
@@ -2167,7 +2317,12 @@ class InvalidData(TestBase):
         log_and_run("cat << EOF > %s\n%s" % ("/tmp/testfile.yaml", testdata))
         ctl = calicoctl("create", testdata)
 
-        self.check_no_data_in_store(testdata)
+        # Profiles are a special case. Getting profiles
+        # always returns the default-allow profile.
+        if testdata['kind'] == 'Profile':
+            self.check_only_default_profile_returned(testdata)
+        else:
+            self.check_no_data_in_store(testdata)
 
         # Assert that we saw the correct error being reported
         ctl.assert_error(error)
@@ -2180,7 +2335,11 @@ class InvalidData(TestBase):
 
         for data in testdata:
             if data['metadata']['name'] in errors:
-                self.check_no_data_in_store(data)
+                if data['kind'] == 'Profile':
+                    self.check_only_default_profile_returned(data)
+                else:
+                    self.check_no_data_in_store(data)
+
 
         # Assert that we saw the correct error being reported
         for value in errors.values():

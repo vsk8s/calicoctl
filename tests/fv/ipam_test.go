@@ -28,7 +28,7 @@ import (
 
 	. "github.com/projectcalico/calicoctl/tests/fv/utils"
 	"github.com/projectcalico/libcalico-go/lib/apiconfig"
-	"github.com/projectcalico/libcalico-go/lib/apis/v3"
+	v3 "github.com/projectcalico/libcalico-go/lib/apis/v3"
 	"github.com/projectcalico/libcalico-go/lib/clientv3"
 	"github.com/projectcalico/libcalico-go/lib/ipam"
 	"github.com/projectcalico/libcalico-go/lib/logutils"
@@ -75,22 +75,23 @@ func TestIPAM(t *testing.T) {
 	Expect(err).NotTo(HaveOccurred())
 
 	// ipam show with specific unallocated IP.
-	out := Calicoctl("ipam", "show", "--ip=10.65.0.2")
+	out := Calicoctl(false, "ipam", "show", "--ip=10.65.0.2")
 	Expect(out).To(ContainSubstring("10.65.0.2 is not assigned"))
 
 	// ipam show, with no allocations yet.
-	out = Calicoctl("ipam", "show")
+	out = Calicoctl(false, "ipam", "show")
 	Expect(out).To(ContainSubstring("IPS IN USE"))
 
 	// Assign some IPs.
-	client.IPAM().AutoAssign(ctx, ipam.AutoAssignArgs{
+	v4, v6, err := client.IPAM().AutoAssign(ctx, ipam.AutoAssignArgs{
 		Num4:  5,
 		Num6:  7,
 		Attrs: map[string]string{"note": "reserved by ipam_test.go"},
 	})
+	Expect(err).NotTo(HaveOccurred())
 
 	// ipam show, pools only.
-	out = Calicoctl("ipam", "show")
+	out = Calicoctl(false, "ipam", "show")
 	Expect(out).To(ContainSubstring("IPS IN USE"))
 	Expect(out).To(ContainSubstring("10.65.0.0/16"))
 	Expect(out).To(ContainSubstring("5 (0%)"))
@@ -98,14 +99,14 @@ func TestIPAM(t *testing.T) {
 	Expect(out).To(ContainSubstring("fd5f:abcd:64::/48"))
 
 	// ipam show, including blocks.
-	out = Calicoctl("ipam", "show", "--show-blocks")
+	out = Calicoctl(false, "ipam", "show", "--show-blocks")
 	Expect(out).To(ContainSubstring("Block"))
 	Expect(out).To(ContainSubstring("5 (8%)"))
 	Expect(out).To(ContainSubstring("59 (92%)"))
 
 	// Find out the allocation block.
 	var allocatedIP string
-	r, err := regexp.Compile("(10\\.65\\.[0-9]+\\.)([0-9]+)/26")
+	r, err := regexp.Compile(`(10\.65\.[0-9]+\.)([0-9]+)/26`)
 	Expect(err).NotTo(HaveOccurred())
 	for _, line := range strings.Split(out, "\n") {
 		sm := r.FindStringSubmatch(line)
@@ -119,13 +120,13 @@ func TestIPAM(t *testing.T) {
 	Expect(allocatedIP).NotTo(BeEmpty())
 
 	// ipam show with specific IP that is now allocated.
-	out = Calicoctl("ipam", "show", "--ip="+allocatedIP)
+	out = Calicoctl(false, "ipam", "show", "--ip="+allocatedIP)
 	Expect(out).To(ContainSubstring(allocatedIP + " is in use"))
 	Expect(out).To(ContainSubstring("Attributes:"))
 	Expect(out).To(ContainSubstring("note: reserved by ipam_test.go"))
 
 	// ipam show with an invalid IP.
-	out, err = CalicoctlMayFail("ipam", "show", "--ip=10.240.0.300")
+	out, err = CalicoctlMayFail(false, "ipam", "show", "--ip=10.240.0.300")
 	Expect(err).To(HaveOccurred())
 	Expect(out).To(ContainSubstring("invalid IP address"))
 
@@ -141,10 +142,11 @@ func TestIPAM(t *testing.T) {
 	// Allocate more than one block's worth (8) of IPs from that
 	// pool.
 	// Assign some IPs.
-	client.IPAM().AutoAssign(ctx, ipam.AutoAssignArgs{
+	v4More, v6More, err := client.IPAM().AutoAssign(ctx, ipam.AutoAssignArgs{
 		Num4:      11,
 		IPv4Pools: []cnet.IPNet{cnet.MustParseNetwork(pool.Spec.CIDR)},
 	})
+	Expect(err).NotTo(HaveOccurred())
 
 	// ipam show, including blocks.
 	//
@@ -160,7 +162,33 @@ func TestIPAM(t *testing.T) {
 	// | IP Pool  | fd5f:abcd:64::/48                         | 1.2089e+24 | 7 (0%)     | 1.2089e+24 (100%) |
 	// | Block    | fd5f:abcd:64:4f2c:ec1b:27b9:1989:77c0/122 |         64 | 7 (11%)    | 57 (89%)          |
 	// +----------+-------------------------------------------+------------+------------+-------------------+
-	outLines := strings.Split(Calicoctl("ipam", "show", "--show-blocks"), "\n")
+	outLines := strings.Split(Calicoctl(false, "ipam", "show", "--show-blocks"), "\n")
 	Expect(outLines).To(ContainElement(And(ContainSubstring("Block"), ContainSubstring("10.66"), ContainSubstring("8 (100%)"), ContainSubstring("0 (0%)"))))
 	Expect(outLines).To(ContainElement(And(ContainSubstring("IP Pool"), ContainSubstring("fd5f"), ContainSubstring("7 (0%)"))))
+
+	// Clean up resources
+	cidrs := append(v4, v4More...)
+	cidrs = append(cidrs, v6...)
+	cidrs = append(cidrs, v6More...)
+	nodename, err := os.Hostname()
+	Expect(err).NotTo(HaveOccurred())
+	var ips []cnet.IP
+	for _, cidr := range cidrs {
+		err = client.IPAM().ReleaseAffinity(ctx, cidr, nodename, false)
+		Expect(err).NotTo(HaveOccurred())
+		ip := cnet.ParseIP(cidr.IP.String())
+		ips = append(ips, *ip)
+	}
+	// Release the IPs
+	_, err = client.IPAM().ReleaseIPs(ctx, ips)
+	Expect(err).NotTo(HaveOccurred())
+
+	_, err = client.IPPools().Delete(ctx, "ipam-test-v4", options.DeleteOptions{})
+	Expect(err).NotTo(HaveOccurred())
+	_, err = client.IPPools().Delete(ctx, "ipam-test-v6", options.DeleteOptions{})
+	Expect(err).NotTo(HaveOccurred())
+	_, err = client.Nodes().Delete(ctx, nodename, options.DeleteOptions{})
+	Expect(err).NotTo(HaveOccurred())
+	_, err = client.IPPools().Delete(ctx, "ipam-test-v4-b29", options.DeleteOptions{})
+	Expect(err).NotTo(HaveOccurred())
 }

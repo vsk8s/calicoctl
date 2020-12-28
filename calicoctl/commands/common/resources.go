@@ -12,11 +12,10 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package commands
+package common
 
 import (
 	"context"
-	"errors"
 	"fmt"
 	"os"
 
@@ -27,8 +26,9 @@ import (
 
 	"github.com/projectcalico/calicoctl/calicoctl/commands/argutils"
 	"github.com/projectcalico/calicoctl/calicoctl/commands/clientmgr"
+	"github.com/projectcalico/calicoctl/calicoctl/commands/file"
 	"github.com/projectcalico/calicoctl/calicoctl/resourcemgr"
-	yaml "github.com/projectcalico/go-yaml-wrapper"
+	"github.com/projectcalico/go-yaml-wrapper"
 	client "github.com/projectcalico/libcalico-go/lib/clientv3"
 	calicoErrors "github.com/projectcalico/libcalico-go/lib/errors"
 )
@@ -36,11 +36,12 @@ import (
 type action int
 
 const (
-	actionApply action = iota
-	actionCreate
-	actionUpdate
-	actionDelete
-	actionGetOrList
+	ActionApply action = iota
+	ActionCreate
+	ActionUpdate
+	ActionDelete
+	ActionGetOrList
+	ActionPatch
 )
 
 // Convert loaded resources to a slice of resources for easier processing.
@@ -78,78 +79,118 @@ func convertToSliceOfResources(loaded interface{}) ([]resourcemgr.ResourceObject
 	return res, nil
 }
 
-// commandResults contains the results from executing a CLI command
-type commandResults struct {
+// CommandResults contains the results from executing a CLI command
+type CommandResults struct {
 	// Whether the input file was invalid.
-	fileInvalid bool
+	FileInvalid bool
 
 	// The number of resources that are being configured.
-	numResources int
+	NumResources int
 
 	// The number of resources that were actually configured.  This will
 	// never be 0 without an associated error.
-	numHandled int
+	NumHandled int
 
 	// The associated error.
-	err error
+	Err error
 
 	// The single type of resource that is being configured, or blank
 	// if multiple resource types are being configured in a single shot.
-	singleKind string
+	SingleKind string
 
 	// The results returned from each invocation
-	resources []runtime.Object
+	Resources []runtime.Object
 
 	// Errors associated with individual resources
-	resErrs []error
+	ResErrs []error
 
 	// The Calico API client used for the requests (useful if required
 	// again).
-	client client.Interface
+	Client client.Interface
 }
 
-// executeConfigCommand is main function called by all of the resource management commands
-// in calicoctl (apply, create, replace, get and delete).  This provides common function
+type fileError struct {
+	error
+}
+
+// ExecuteConfigCommand is main function called by all of the resource management commands
+// in calicoctl (apply, create, replace, get, delete and patch).  This provides common function
 // for all these commands:
 // 	-  Load resources from file (or if not specified determine the resource from
 // 	   the command line options).
 // 	-  Convert the loaded resources into a list of resources (easier to handle)
 // 	-  Process each resource individually, fanning out to the appropriate methods on
 //	   the client interface, collate results and exit on the first error.
-func executeConfigCommand(args map[string]interface{}, action action) commandResults {
+func ExecuteConfigCommand(args map[string]interface{}, action action) CommandResults {
 	var resources []resourcemgr.ResourceObject
 
 	singleKind := false
 
 	log.Info("Executing config command")
 
+	errorOnEmpty := !argutils.ArgBoolOrFalse(args, "--skip-empty")
+
 	if filename := args["--filename"]; filename != nil {
-		// Filename is specified, load the resource from file and convert to a slice
-		// of resources for easier handling.
-		r, err := resourcemgr.CreateResourcesFromFile(filename.(string))
+		// Filename is specified.  Use the file iterator to handle the fact that this may be a directory rather than a
+		// single file. For each file load the resources from the file and convert to a single slice of resources for
+		// easier handling.
+		err := file.Iter(args, func(modifiedArgs map[string]interface{}) error {
+			modifiedFilename := modifiedArgs["--filename"].(string)
+
+			r, err := resourcemgr.CreateResourcesFromFile(modifiedFilename)
+			if err != nil {
+				return fileError{err}
+			}
+
+			converted, err := convertToSliceOfResources(r)
+			if err != nil {
+				return fileError{err}
+			}
+
+			if len(converted) == 0 && errorOnEmpty {
+				// We should fail on empty files.
+				return fmt.Errorf("No resources specified in file %s", modifiedFilename)
+			}
+
+			resources = append(resources, converted...)
+			return nil
+		})
+
 		if err != nil {
-			return commandResults{err: err, fileInvalid: true}
+			_, ok := err.(fileError)
+			return CommandResults{Err: err, FileInvalid: ok}
 		}
 
-		resources, err = convertToSliceOfResources(r)
-		if err != nil {
-			return commandResults{err: err}
+		if len(resources) == 0 {
+			if errorOnEmpty {
+				// Empty files are handled above, so the only way to get here is if --filename pointed to a directory.
+				// We can therefore tweak the error message slightly to be more specific.
+				return CommandResults{
+					Err: fmt.Errorf("No resources specified in directory %s", filename),
+				}
+			} else {
+				// No data, but not an error case. Return an empty set of results.
+				return CommandResults{}
+			}
 		}
 	} else {
 		// Filename is not specific so extract the resource from the arguments. This
-		// is only useful for delete and get functions - but we don't need to check that
+		// is only useful for delete, get and patch functions - but we don't need to check that
 		// here since the command syntax requires a filename for the other resource
 		// management commands.
 		var err error
 		singleKind = true
 		resources, err = resourcemgr.GetResourcesFromArgs(args)
 		if err != nil {
-			return commandResults{err: err}
+			return CommandResults{Err: err}
 		}
-	}
 
-	if len(resources) == 0 {
-		return commandResults{err: errors.New("no resources specified")}
+		if len(resources) == 0 {
+			// No resources specified on non-file input is always an error.
+			return CommandResults{
+				Err: fmt.Errorf("No resources specified"),
+			}
+		}
 	}
 
 	if log.GetLevel() >= log.DebugLevel {
@@ -159,32 +200,32 @@ func executeConfigCommand(args map[string]interface{}, action action) commandRes
 
 		d, err := yaml.Marshal(resources)
 		if err != nil {
-			return commandResults{err: err}
+			return CommandResults{Err: err}
 		}
 		log.Debugf("Data: %s", string(d))
 	}
 
 	// Load the client config and connect.
 	cf := args["--config"].(string)
-	client, err := clientmgr.NewClient(cf)
+	cclient, err := clientmgr.NewClient(cf)
 	if err != nil {
 		fmt.Printf("Failed to create Calico API client: %s\n", err)
 		os.Exit(1)
 	}
-	log.Infof("Client: %v", client)
+	log.Infof("Client: %v", cclient)
 
 	// Initialise the command results with the number of resources and the name of the
 	// kind of resource (if only dealing with a single resource).
-	results := commandResults{client: client}
+	results := CommandResults{Client: cclient}
 	var kind string
 	count := make(map[string]int)
 	for _, r := range resources {
 		kind = r.GetObjectKind().GroupVersionKind().Kind
 		count[kind] = count[kind] + 1
-		results.numResources = results.numResources + 1
+		results.NumResources = results.NumResources + 1
 	}
 	if len(count) == 1 || singleKind {
-		results.singleKind = kind
+		results.SingleKind = kind
 	}
 
 	// Now execute the command on each resource in order, exiting as soon as we hit an
@@ -207,19 +248,18 @@ func executeConfigCommand(args map[string]interface{}, action action) commandRes
 	}
 
 	if emptyName {
-		return commandResults{err: fmt.Errorf("resource name may not be empty")}
+		return CommandResults{Err: fmt.Errorf("resource name may not be empty")}
 	}
 
 	for _, r := range resources {
-		res, err := executeResourceAction(args, client, r, action)
+		res, err := ExecuteResourceAction(args, cclient, r, action)
 		if err != nil {
 			switch action {
-			case actionDelete, actionGetOrList:
-				results.resErrs = append(results.resErrs, err)
+			case ActionApply, ActionCreate, ActionDelete, ActionGetOrList:
+				results.ResErrs = append(results.ResErrs, err)
 				continue
 			default:
-				results.err = err
-				break
+				results.Err = err
 			}
 		}
 
@@ -227,7 +267,7 @@ func executeConfigCommand(args map[string]interface{}, action action) commandRes
 		// Skip removing cluster specific metadata if this is is called as a "list"
 		// operation (no specific name is specified).
 		if export && nameSpecified {
-			for i, _ := range res {
+			for i := range res {
 				rom := res[i].(v1.ObjectMetaAccessor).GetObjectMeta()
 				rom.SetNamespace("")
 				rom.SetUID("")
@@ -239,16 +279,16 @@ func executeConfigCommand(args map[string]interface{}, action action) commandRes
 			}
 		}
 
-		results.resources = append(results.resources, res...)
-		results.numHandled = results.numHandled + len(res)
+		results.Resources = append(results.Resources, res...)
+		results.NumHandled = results.NumHandled + len(res)
 	}
 
 	return results
 }
 
-// executeResourceAction fans out the specific resource action to the appropriate method
+// ExecuteResourceAction fans out the specific resource action to the appropriate method
 // on the ResourceManager for the specific resource.
-func executeResourceAction(args map[string]interface{}, client client.Interface, resource resourcemgr.ResourceObject, action action) ([]runtime.Object, error) {
+func ExecuteResourceAction(args map[string]interface{}, client client.Interface, resource resourcemgr.ResourceObject, action action) ([]runtime.Object, error) {
 	rm := resourcemgr.GetResourceManager(resource)
 
 	err := handleNamespace(resource, rm, args)
@@ -260,17 +300,19 @@ func executeResourceAction(args map[string]interface{}, client client.Interface,
 	ctx := context.Background()
 
 	switch action {
-	case actionApply:
+	case ActionApply:
 		resOut, err = rm.Apply(ctx, client, resource)
-	case actionCreate:
+	case ActionCreate:
 		resOut, err = rm.Create(ctx, client, resource)
-	case actionUpdate:
+	case ActionUpdate:
 		resOut, err = rm.Update(ctx, client, resource)
-	case actionDelete:
+	case ActionDelete:
 		resOut, err = rm.Delete(ctx, client, resource)
-	case actionGetOrList:
+	case ActionGetOrList:
 		resOut, err = rm.GetOrList(ctx, client, resource)
-
+	case ActionPatch:
+		patch := args["--patch"].(string)
+		resOut, err = rm.Patch(ctx, client, resource, patch)
 	}
 
 	// Skip over some errors depending on command line options.

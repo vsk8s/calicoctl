@@ -24,8 +24,10 @@ import (
 	"k8s.io/apimachinery/pkg/runtime"
 
 	"github.com/projectcalico/calicoctl/calicoctl/commands/argutils"
+	"github.com/projectcalico/calicoctl/calicoctl/commands/common"
 	"github.com/projectcalico/calicoctl/calicoctl/commands/constants"
 	"github.com/projectcalico/calicoctl/calicoctl/commands/v1resourceloader"
+	"github.com/projectcalico/calicoctl/calicoctl/util"
 	"github.com/projectcalico/libcalico-go/lib/apis/v1/unversioned"
 	"github.com/projectcalico/libcalico-go/lib/upgrade/converters"
 	validator "github.com/projectcalico/libcalico-go/lib/validator/v3"
@@ -33,15 +35,15 @@ import (
 
 func Convert(args []string) error {
 	doc := constants.DatastoreIntro + `Usage:
-  calicoctl convert --filename=<FILENAME>
+  <BINARY_NAME> convert --filename=<FILENAME>
                 [--output=<OUTPUT>] [--ignore-validation]
 
 Examples:
   # Convert the contents of policy.yaml to v3 policy.
-  calicoctl convert -f ./policy.yaml -o yaml
+  <BINARY_NAME> convert -f ./policy.yaml -o yaml
 
   # Convert a policy based on the JSON passed into stdin.
-  cat policy.json | calicoctl convert -f -
+  cat policy.json | <BINARY_NAME> convert -f -
 
 Options:
   -h --help                     Show this screen.
@@ -57,6 +59,10 @@ Description:
 
   The default output will be printed to stdout in YAML format.
 `
+	// Replace all instances of BINARY_NAME with the name of the binary.
+	name, _ := util.NameAndDescription()
+	doc = strings.ReplaceAll(doc, "<BINARY_NAME>", name)
+
 	parsedArgs, err := docopt.Parse(doc, args, true, "", false, false)
 	if err != nil {
 		return fmt.Errorf("Invalid option: 'calicoctl %s'. Use flag '--help' to read about a specific subcommand.", strings.Join(args, " "))
@@ -65,14 +71,14 @@ Description:
 		return nil
 	}
 
-	var rp resourcePrinter
+	var rp common.ResourcePrinter
 	output := parsedArgs["--output"].(string)
 	// Only supported output formats are yaml (default) and json.
 	switch output {
 	case "yaml", "yml":
-		rp = resourcePrinterYAML{}
+		rp = common.ResourcePrinterYAML{}
 	case "json":
-		rp = resourcePrinterJSON{}
+		rp = common.ResourcePrinterJSON{}
 	default:
 		return fmt.Errorf("unrecognized output format '%s'", output)
 	}
@@ -116,7 +122,7 @@ Description:
 
 	log.Infof("results: %+v", results)
 
-	err = rp.print(nil, results)
+	err = rp.Print(nil, results)
 	if err != nil {
 		return fmt.Errorf("Failed to execute command: %v", err)
 	}
