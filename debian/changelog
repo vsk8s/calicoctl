@@ -1,3 +1,9 @@
+calico-ctl (3.17.1-1) unstable; urgency=medium
+
+  * Bump to 3.17.1 
+
+ -- Maximilian Falkenstein <maximilian.falkenstein@sos.ethz.ch>  Mon, 28 Dec 2020 15:40:22 +0100
+
 calico-ctl (3.8.2-1) unstable; urgency=medium
 
   * Bump to 3.8.2

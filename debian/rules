@@ -1,17 +1,19 @@
 #!/usr/bin/make -f
 include /usr/share/dpkg/pkg-info.mk
-export GOPATH
 
-override_dh_auto_clean:
-	-mkdir /tmp/src
-	GOPATH=/tmp glide i
-	dh_auto_clean -O--buildsystem=golang
+GO_LDFLAGS += -X github.com/projectcalico/calicoctl/calicoctl/commands.VERSION=$(DEB_VERSION_UPSTREAM)
+GO_LDFLAGS += -X github.com/projectcalico/calicoctl/calicoctl/commands.GIT_REVISION=$(DEB_VERSION_UPSTREAM)
+
+export CGO_CFLAGS            := $(CFLAGS)
+export CGO_CPPFLAGS          := $(CPPFLAGS)
+export GO111MODULE=on
+export GOPROXY=
 
 override_dh_auto_install:
 	dh_auto_install -- --no-source
 
 %:
-	dh $@ --buildsystem=golang --with=golang
+	dh $@ --buildsystem=golang --with=golang --builddirectory=_build
 
 override_dh_auto_test:
 	# The test suite doesn't really work outside of the provided Docker
@@ -19,5 +21,4 @@ override_dh_auto_test:
 	/bin/true
 
 override_dh_auto_build:
-	dh_auto_build -O--buildsystem=golang -- -ldflags "-X github.com/projectcalico/calicoctl/calicoctl/commands.VERSION=$(DEB_VERSION_UPSTREAM) \
-	-X github.com/projectcalico/calicoctl/calicoctl/commands.GIT_REVISION=$(DEB_VERSION_UPSTREAM)" || /bin/true
+	dh_auto_build -- -tags '$(TAGS)' -ldflags '$(GO_LDFLAGS)'
