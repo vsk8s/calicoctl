@@ -1,0 +1,23 @@
+calico-ctl (3.20.0-1) unstable; urgency=medium
+
+  * Bump to 3.20.0
+
+ -- Maximilian Falkenstein <maximilian.falkenstein@sos.ethz.ch>  Sun, 12 Sep 2021 15:29:46 +0200
+
+calico-ctl (3.17.1-1) unstable; urgency=medium
+
+  * Bump to 3.17.1 
+
+ -- Maximilian Falkenstein <maximilian.falkenstein@sos.ethz.ch>  Mon, 28 Dec 2020 15:40:22 +0100
+
+calico-ctl (3.8.2-1) unstable; urgency=medium
+
+  * Bump to 3.8.2
+
+ -- Maximilian Falkenstein <maximilian.falkenstein@sos.ethz.ch>  Thu, 29 Aug 2019 20:00:28 +0200
+
+calico-ctl (3.4.0-1) unstable; urgency=medium
+
+  * Initial release
+
+ -- Maximilian Falkenstein <maximilian.falkenstein@sos.ethz.ch>  Sun, 20 Jan 2019 00:24:49 +0100
